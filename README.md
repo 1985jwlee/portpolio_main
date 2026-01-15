@@ -384,7 +384,7 @@ Phase 0: 설계 확정               ✅ 완료
 Phase 1: MVP 구현 (핵심 흐름)     🔄 진행 예정
 Phase 2: 이벤트 신뢰성            📋 계획
 Phase 3: Hot/Cold Snapshot       📋 계획
-Phase 4: 포트폴리오 정리          📋 계획
+Phase 4: 운영 도구 구현           📋 계획
 ```
 
 **예상 완료 기간**: 3~4주 (Phase 1 MVP까지는 1~2주)
@@ -403,11 +403,69 @@ Phase 4: 포트폴리오 정리          📋 계획
 - ❌ 전투 시스템
 - ❌ 복잡한 게임 콘텐츠
 - ❌ 완전한 매치메이킹
-- ❌ 운영 대시보드 (설계만)
+- ❌ 운영 대시보드 (Phase 4에서 구현)
 
 **왜 여기서 멈췄는가?**
 
 > "더 만들 수 있다"가 아니라 **"언제 멈춰야 하는지 안다"**를 증명하기 위해
+
+---
+
+## 🎨 Phase 4: Admin Dashboard
+
+### React 기반 운영 도구 구현
+
+**관련 프로젝트**: [React Object State Manager](https://github.com/1985jwlee/portpolio_react)
+
+Phase 4에서는 설계된 Admin Dashboard를 실제로 구현합니다.
+
+#### 구현 예정 기능
+
+```
+1. 실시간 모니터링
+   - Zone별 동접자 수 (CCU)
+   - GameLoop Tick 지연 모니터링
+   - 서버 Health Check 현황
+
+2. 플레이어 상태 조회
+   - 플레이어별 오브젝트 상태
+   - Component 필드값 실시간 조회
+   - 상태 변경 이력
+
+3. Event Stream 시각화
+   - Kafka Topic별 이벤트 흐름
+   - Consumer Lag 모니터링
+   - 이벤트 처리 속도
+
+4. 장애 대응 인터페이스
+   - Snapshot 복구 트리거
+   - 서버 재시작 컨트롤
+   - 긴급 공지 발송
+
+5. Snapshot 관리
+   - Hot/Cold Snapshot 조회
+   - 수동 Snapshot 생성
+   - 복구 테스트
+```
+
+#### 기술 스택
+
+```
+Frontend: React 19 + TypeScript
+State: Zustand (전역 상태 관리)
+UI: Tailwind CSS
+Real-time: WebSocket (Server → Client)
+API: REST (Client → Server)
+```
+
+#### React 프로토타입에서 검증된 것
+
+- ✅ 동적 오브젝트 상태 관리
+- ✅ Component 기반 필드 편집
+- ✅ 상태 저장/복원 메커니즘
+- ✅ Snapshot 관리 UI
+
+이 프로토타입을 기반으로 실제 Admin Dashboard를 구현합니다.
 
 ---
 
@@ -457,6 +515,17 @@ Phase 4: 포트폴리오 정리          📋 계획
 | **정규화 계층** | Event → DB Schema | External API → Internal Schema |
 | **계약 안정성** | 운영 API 불변 | 클라이언트 API 불변 |
 | **비동기 처리** | Kafka Event Stream | WebSocket Stream |
+
+### 🎨 [React Object State Manager](https://github.com/1985jwlee/portpolio_react)
+
+**Admin Dashboard 프로토타입**
+
+| Main Portfolio | React Portfolio |
+|----------------|-----------------|
+| 서버 오브젝트 상태 관리 | UI 오브젝트 상태 관리 |
+| Event Sourcing | State Management |
+| Snapshot 복구 (서버) | 저장/불러오기 (클라이언트) |
+| 운영 대시보드 설계 | 운영 도구 구현 |
 
 > **핵심 메시지**: "설계 원칙은 도메인을 넘어 일반화 가능합니다"
 
