@@ -308,6 +308,33 @@ public async Task HandlePlayerMoved(PlayerMovedEvent evt)
 }
 ```
 
+```sequenceDiagram
+    participant C as Client
+    participant GS as Game Server
+    participant K as Kafka
+    participant PS as Platform Server
+    participant DB as Database
+    
+    Note over C,GS: Command Pattern (동기)
+    C->>GS: MoveCommand(newPos)
+    GS->>GS: Validate Authority
+    alt Valid
+        GS->>GS: Update Memory State
+        GS->>C: MoveResponse(accepted)
+    else Invalid
+        GS->>C: MoveResponse(rejected)
+    end
+    
+    Note over GS,PS: Event Pattern (비동기)
+    GS->>K: PlayerMovedEvent
+    Note over K: Fire-and-Forget<br/>게임은 계속 진행
+    K->>PS: Event Delivery
+    PS->>PS: Idempotency Check
+    PS->>DB: Persist Movement
+    
+    Note over C,DB: 핵심: Kafka 응답을 기다리지 않음!
+```
+
 **핵심 포인트**:
 1. 게임 서버는 Kafka 응답을 기다리지 않음
 2. 상태는 메모리에서 이미 확정됨
