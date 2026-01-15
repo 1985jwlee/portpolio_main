@@ -241,14 +241,27 @@ graph TB
 
 ### 복구 전략
 
-```
-게임 서버 크래시 시:
+```mermaid
+graph TD
+    CRASH[Game Server Crash] --> TRY_HOT{Redis Available?}
+    
+    TRY_HOT -->|Yes| HOT_RECOVER[Hot Snapshot Recovery<br/>RTO: 10초]
+    TRY_HOT -->|No| TRY_COLD{MongoDB Available?}
+    
+    TRY_COLD -->|Yes| COLD_RECOVER[Cold Snapshot Recovery<br/>RTO: 2-3분]
+    TRY_COLD -->|No| EVENT_REPLAY[Event Replay<br/>RTO: 수분~수십분]
+    
+    HOT_RECOVER --> ONLINE[서비스 재개]
+    COLD_RECOVER --> ONLINE
+    EVENT_REPLAY --> ONLINE
+    
+    style CRASH fill:#DC143C,stroke:#8B0000,color:#fff
+    style HOT_RECOVER fill:#90EE90,stroke:#228B22
+    style COLD_RECOVER fill:#FFA07A,stroke:#FF4500
+    style EVENT_REPLAY fill:#FFB6C1,stroke:#DC143C
+    style ONLINE fill:#4169E1,stroke:#00008B,color:#fff
 
-1순위: Redis Hot Snapshot (RTO: 10초)
-    ↓ 실패 시
-2순위: MongoDB Cold Snapshot (RTO: 2~3분)
-    ↓ 실패 시
-3순위: Event Replay (RTO: 수분~수십분)
+
 ```
 
 **증거 코드**:
