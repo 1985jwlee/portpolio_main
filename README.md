@@ -130,47 +130,57 @@ Server-authoritative:
 
 ### 전체 구성도
 
-```
-┌─────────────────┐
-│ Unity Client    │
-│ (Server Auth)   │
-└────────┬────────┘
-         │ TCP/IP (Command)
-         ↓
-┌─────────────────┐
-│ Game Server     │
-│ (C#)            │
-│                 │
-│ • TCP Socket    │
-│ • GameLoop Tick │
-│ • Memory State  │
-│ • Domain Events │
-└────────┬────────┘
-         │ Kafka (Event)
-         ↓
-┌─────────────────┐
-│ Event Stream    │
-│ (Kafka)         │
-└────────┬────────┘
-         │
-         ↓
-┌─────────────────┐
-│ Platform Server │
-│ (TypeScript)    │
-│                 │
-│ • Event Handler │
-│ • Persistence   │
-│ • REST API      │
-└────────┬────────┘
-         │
-         ↓
-┌─────────────────┐
-│ Storage Layer   │
-│                 │
-│ • Redis (Hot)   │
-│ • MongoDB (Cold)│
-│ • MySQL (OLTP)  │
-└─────────────────┘
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        UNITY[Unity Client<br/>Server-Authoritative]
+    end
+    
+    subgraph "Game Server Layer (C#)"
+        TCP[TCP Socket Server]
+        GAMELOOP[GameLoop Ticker<br/>Fixed Update]
+        MEMORY[In-Memory State<br/>Player/Monster/Items]
+        COMMAND[Command Handler<br/>Validation]
+        EVENT_PUB[Event Publisher<br/>Kafka Producer]
+    end
+    
+    subgraph "Event Stream"
+        KAFKA[Apache Kafka<br/>Domain Events]
+    end
+    
+    subgraph "Platform Server Layer (TypeScript/Bun.js)"
+        EVENT_SUB[Event Consumer<br/>Kafka Subscriber]
+        HANDLER[Event Handlers<br/>Idempotency Check]
+        REST[REST API<br/>Operations]
+    end
+    
+    subgraph "Storage Layer"
+        REDIS[(Redis<br/>Hot Snapshot<br/>10s Recovery)]
+        MONGO[(MongoDB<br/>Cold Snapshot<br/>2-3min Recovery)]
+        MYSQL[(MySQL<br/>OLTP Data)]
+    end
+    
+    UNITY -->|Command Request| TCP
+    TCP --> COMMAND
+    COMMAND --> GAMELOOP
+    GAMELOOP --> MEMORY
+    MEMORY --> EVENT_PUB
+    EVENT_PUB -->|Fire & Forget| KAFKA
+    KAFKA --> EVENT_SUB
+    EVENT_SUB --> HANDLER
+    HANDLER --> REST
+    
+    GAMELOOP -.->|Periodic Snapshot| REDIS
+    HANDLER -.->|Cold Snapshot| MONGO
+    HANDLER --> MYSQL
+    
+    style UNITY fill:#90EE90,stroke:#228B22,stroke-width:2px
+    style GAMELOOP fill:#FFB6C1,stroke:#DC143C,stroke-width:3px
+    style KAFKA fill:#FFA07A,stroke:#FF4500,stroke-width:2px
+    style EVENT_SUB fill:#87CEEB,stroke:#4169E1,stroke-width:2px
+    style REDIS fill:#FFE4E1,stroke:#DC143C
+    style MONGO fill:#E0FFE0,stroke:#228B22
+
 ```
 
 ### 핵심 패턴: Command vs Event
