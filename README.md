@@ -183,6 +183,16 @@ graph TB
 
 ```
 
+### 핵심 패턴: Command vs Event
+
+| 구분 | Command | Domain Event |
+|------|---------|--------------|
+| **의미** | "해달라" (요청) | "이미 일어났다" (사실) |
+| **시점** | 미래 | 과거 |
+| **실패** | 가능 | 불가능 (이미 발생) |
+| **흐름** | Client → Server | Server → Platform |
+| **용도** | 게임 로직 실행 | 기록 및 연동 |
+
 ```mermaid
 sequenceDiagram
     participant C as Client
@@ -210,16 +220,6 @@ sequenceDiagram
     
     Note over C,DB: 핵심: Kafka 응답을 기다리지 않음!
 ```
-
-### 핵심 패턴: Command vs Event
-
-| 구분 | Command | Domain Event |
-|------|---------|--------------|
-| **의미** | "해달라" (요청) | "이미 일어났다" (사실) |
-| **시점** | 미래 | 과거 |
-| **실패** | 가능 | 불가능 (이미 발생) |
-| **흐름** | Client → Server | Server → Platform |
-| **용도** | 게임 로직 실행 | 기록 및 연동 |
 
 ---
 
