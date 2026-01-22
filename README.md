@@ -18,6 +18,7 @@
 ✓ 이벤트 기반 아키텍처의 실무적 적용
 ✓ 장애, 복구, 운영까지 고려한 시스템 설계
 ✓ 개인이 아닌 조직에 남는 시스템을 만드는 관점
+✓ Binary Serialization을 활용한 효율적인 네트워크 프로토콜 설계
 ```
 
 **대상 독자**: CTO, 테크 리드, 시니어 백엔드/서버 엔지니어
@@ -137,8 +138,8 @@ graph TB
     end
     
     subgraph "Game Server Layer (C#)"
-        TCP[TCP Socket Server]
-        GAMELOOP[GameLoop Ticker<br/>Fixed Update]
+        TCP[TCP Socket Server<br/>MessagePack Protocol]
+        GAMELOOP[GameLoop Ticker<br/>Fixed Update 50ms]
         MEMORY[In-Memory State<br/>Player/Monster/Items]
         COMMAND[Command Handler<br/>Validation]
         EVENT_PUB[Event Publisher<br/>Kafka Producer]
@@ -160,7 +161,7 @@ graph TB
         MYSQL[(MySQL<br/>OLTP Data)]
     end
     
-    UNITY -->|Command Request| TCP
+    UNITY -->|Binary MessagePack<br/>TCP/IP| TCP
     TCP --> COMMAND
     COMMAND --> GAMELOOP
     GAMELOOP --> MEMORY
@@ -175,51 +176,652 @@ graph TB
     HANDLER --> MYSQL
     
     style UNITY fill:#90EE90,stroke:#228B22,stroke-width:2px
+    style TCP fill:#FFD700,stroke:#FF8C00,stroke-width:3px
     style GAMELOOP fill:#FFB6C1,stroke:#DC143C,stroke-width:3px
     style KAFKA fill:#FFA07A,stroke:#FF4500,stroke-width:2px
     style EVENT_SUB fill:#87CEEB,stroke:#4169E1,stroke-width:2px
     style REDIS fill:#FFE4E1,stroke:#DC143C
     style MONGO fill:#E0FFE0,stroke:#228B22
-
 ```
 
-### 핵심 패턴: Command vs Event
+---
 
-| 구분 | Command | Domain Event |
-|------|---------|--------------|
-| **의미** | "해달라" (요청) | "이미 일어났다" (사실) |
-| **시점** | 미래 | 과거 |
-| **실패** | 가능 | 불가능 (이미 발생) |
-| **흐름** | Client → Server | Server → Platform |
-| **용도** | 게임 로직 실행 | 기록 및 연동 |
+## 🔌 Unity ↔ Game Server 통신 프로토콜
+
+### MessagePack 기반 Binary Serialization
+
+**선택 이유**:
+```
+✓ JSON 대비 2~5배 작은 패킷 크기
+✓ 직렬화/역직렬화 성능 우수 (네이티브 수준)
+✓ C#과 TypeScript 양쪽 모두 지원
+✓ 스키마 정의로 타입 안정성 확보
+✓ 실시간 게임에 최적화된 바이너리 포맷
+```
+
+### 패킷 구조 설계
+
+#### 공통 패킷 헤더
+
+```csharp
+[MessagePackObject]
+public class PacketHeader
+{
+    [Key(0)]
+    public ushort PacketId { get; set; }        // 패킷 식별자
+    
+    [Key(1)]
+    public uint Sequence { get; set; }          // 시퀀스 번호
+    
+    [Key(2)]
+    public long Timestamp { get; set; }         // 타임스탬프 (Unix ms)
+    
+    [Key(3)]
+    public ushort PayloadLength { get; set; }   // 페이로드 길이
+}
+```
+
+#### Request/Response 패킷
+
+```csharp
+// 클라이언트 → 서버
+[MessagePackObject]
+public class MoveRequestPacket
+{
+    [Key(0)]
+    public PacketHeader Header { get; set; }
+    
+    [Key(1)]
+    public string PlayerId { get; set; }
+    
+    [Key(2)]
+    public Vector3Data NewPosition { get; set; }
+    
+    [Key(3)]
+    public float ClientTimestamp { get; set; }  // 지연 보상용
+}
+
+// 서버 → 클라이언트
+[MessagePackObject]
+public class MoveResponsePacket
+{
+    [Key(0)]
+    public PacketHeader Header { get; set; }
+    
+    [Key(1)]
+    public bool Accepted { get; set; }
+    
+    [Key(2)]
+    public Vector3Data ServerPosition { get; set; }
+    
+    [Key(3)]
+    public string RejectReason { get; set; }    // 거부 사유
+    
+    [Key(4)]
+    public float ServerTimestamp { get; set; }
+}
+```
+
+#### 커스텀 타입 직렬화
+
+```csharp
+// Unity Vector3를 MessagePack으로 직렬화
+[MessagePackObject]
+public struct Vector3Data
+{
+    [Key(0)]
+    public float X { get; set; }
+    
+    [Key(1)]
+    public float Y { get; set; }
+    
+    [Key(2)]
+    public float Z { get; set; }
+    
+    public static implicit operator Vector3Data(Vector3 v)
+        => new Vector3Data { X = v.x, Y = v.y, Z = v.z };
+    
+    public static implicit operator Vector3(Vector3Data v)
+        => new Vector3(v.X, v.Y, v.Z);
+}
+```
+
+### TCP 프레임 프로토콜
+
+```
+┌─────────────────────────────────────────────────┐
+│ Frame Header (6 bytes)                          │
+├─────────────────────────────────────────────────┤
+│ Magic Number (2 bytes): 0xABCD                  │
+│ Payload Length (4 bytes): uint32                │
+├─────────────────────────────────────────────────┤
+│ MessagePack Payload (variable)                  │
+├─────────────────────────────────────────────────┤
+│ Checksum (4 bytes): CRC32 (optional)            │
+└─────────────────────────────────────────────────┘
+```
+
+**프레임 처리 로직**:
+
+```csharp
+// 서버측 수신
+public class FrameReader
+{
+    private const ushort MAGIC_NUMBER = 0xABCD;
+    private byte[] _buffer = new byte[8192];
+    private int _bufferOffset = 0;
+    
+    public async Task<byte[]> ReadFrameAsync(NetworkStream stream)
+    {
+        // 1. Magic Number 읽기
+        await stream.ReadAsync(_buffer, 0, 2);
+        var magic = BitConverter.ToUInt16(_buffer, 0);
+        
+        if (magic != MAGIC_NUMBER)
+            throw new InvalidDataException("Invalid magic number");
+        
+        // 2. Payload Length 읽기
+        await stream.ReadAsync(_buffer, 0, 4);
+        var length = BitConverter.ToUInt32(_buffer, 0);
+        
+        if (length > 1_048_576) // 1MB 제한
+            throw new InvalidDataException("Payload too large");
+        
+        // 3. Payload 읽기
+        var payload = new byte[length];
+        var totalRead = 0;
+        
+        while (totalRead < length)
+        {
+            var read = await stream.ReadAsync(
+                payload, 
+                totalRead, 
+                (int)length - totalRead
+            );
+            
+            if (read == 0)
+                throw new EndOfStreamException();
+            
+            totalRead += read;
+        }
+        
+        return payload;
+    }
+}
+```
+
+### Unity 클라이언트 구현
+
+```csharp
+using System;
+using System.Net.Sockets;
+using UnityEngine;
+using MessagePack;
+
+public class NetworkClient : MonoBehaviour
+{
+    private TcpClient _client;
+    private NetworkStream _stream;
+    private uint _sequence = 0;
+    
+    public async void SendMoveRequest(Vector3 newPosition)
+    {
+        var packet = new MoveRequestPacket
+        {
+            Header = new PacketHeader
+            {
+                PacketId = 1001,
+                Sequence = _sequence++,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            },
+            PlayerId = PlayerPrefs.GetString("PlayerId"),
+            NewPosition = newPosition,
+            ClientTimestamp = Time.time
+        };
+        
+        // MessagePack 직렬화
+        var payload = MessagePackSerializer.Serialize(packet);
+        
+        // Frame 구성
+        var frame = BuildFrame(payload);
+        
+        // 전송
+        await _stream.WriteAsync(frame, 0, frame.Length);
+        
+        Debug.Log($"[Network] Sent: MoveRequest seq={packet.Header.Sequence}");
+    }
+    
+    private byte[] BuildFrame(byte[] payload)
+    {
+        var frame = new byte[6 + payload.Length];
+        
+        // Magic Number
+        BitConverter.GetBytes((ushort)0xABCD).CopyTo(frame, 0);
+        
+        // Payload Length
+        BitConverter.GetBytes((uint)payload.Length).CopyTo(frame, 2);
+        
+        // Payload
+        payload.CopyTo(frame, 6);
+        
+        return frame;
+    }
+    
+    private async void ReceiveLoop()
+    {
+        var frameReader = new FrameReader();
+        
+        while (true)
+        {
+            try
+            {
+                var payload = await frameReader.ReadFrameAsync(_stream);
+                ProcessPacket(payload);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Network] Receive error: {ex.Message}");
+                break;
+            }
+        }
+    }
+    
+    private void ProcessPacket(byte[] payload)
+    {
+        // MessagePack 역직렬화
+        var response = MessagePackSerializer.Deserialize<MoveResponsePacket>(payload);
+        
+        if (response.Accepted)
+        {
+            // 서버가 승인한 위치로 이동
+            transform.position = response.ServerPosition;
+            
+            var latency = Time.time - response.ServerTimestamp;
+            Debug.Log($"[Network] Move accepted. Latency: {latency * 1000:F1}ms");
+        }
+        else
+        {
+            Debug.LogWarning($"[Network] Move rejected: {response.RejectReason}");
+        }
+    }
+}
+```
+
+### 게임 서버 구현
+
+```csharp
+public class PacketProcessor
+{
+    public void ProcessPacket(Session session, byte[] payload)
+    {
+        // MessagePack 역직렬화
+        var request = MessagePackSerializer.Deserialize<MoveRequestPacket>(payload);
+        
+        // Command 생성
+        var command = new MoveCommand
+        {
+            PlayerId = request.PlayerId,
+            NewPosition = request.NewPosition,
+            ClientTimestamp = request.ClientTimestamp,
+            RequestSequence = request.Header.Sequence
+        };
+        
+        // GameLoop Queue에 적재
+        GameLoop.Instance.EnqueueCommand(command);
+    }
+}
+
+public class MoveCommandHandler
+{
+    public MoveResponsePacket Execute(MoveCommand cmd, World world)
+    {
+        var player = world.GetPlayer(cmd.PlayerId);
+        
+        // 검증
+        var validation = ValidateMove(player, cmd.NewPosition);
+        
+        if (!validation.IsValid)
+        {
+            return new MoveResponsePacket
+            {
+                Header = new PacketHeader
+                {
+                    PacketId = 2001,
+                    Sequence = cmd.RequestSequence,
+                    Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                },
+                Accepted = false,
+                ServerPosition = player.Position,
+                RejectReason = validation.Reason,
+                ServerTimestamp = Time.time
+            };
+        }
+        
+        // 상태 변경 (메모리)
+        var oldPosition = player.Position;
+        player.Position = cmd.NewPosition;
+        
+        // Domain Event 발행 (비동기)
+        PublishEvent(new PlayerMovedEvent
+        {
+            EventId = Guid.NewGuid().ToString(),
+            PlayerId = player.Id,
+            FromPosition = oldPosition,
+            ToPosition = cmd.NewPosition,
+            OccurredAt = DateTime.UtcNow
+        });
+        
+        // 응답
+        return new MoveResponsePacket
+        {
+            Header = new PacketHeader
+            {
+                PacketId = 2001,
+                Sequence = cmd.RequestSequence,
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            },
+            Accepted = true,
+            ServerPosition = player.Position,
+            ServerTimestamp = Time.time
+        };
+    }
+}
+```
+
+### 성능 최적화
+
+#### 1. 패킷 풀링
+
+```csharp
+public class PacketPool<T> where T : class, new()
+{
+    private readonly ConcurrentBag<T> _pool = new();
+    
+    public T Rent()
+    {
+        return _pool.TryTake(out var item) ? item : new T();
+    }
+    
+    public void Return(T item)
+    {
+        // 재사용 가능한 상태로 초기화
+        if (item is IResettable resettable)
+            resettable.Reset();
+        
+        _pool.Add(item);
+    }
+}
+
+// 사용
+var packet = _packetPool.Rent();
+try
+{
+    // 패킷 처리
+}
+finally
+{
+    _packetPool.Return(packet);
+}
+```
+
+#### 2. Zero-Copy 직렬화
+
+```csharp
+// ArraySegment를 활용한 메모리 절약
+public class ZeroCopySerializer
+{
+    private readonly byte[] _sharedBuffer = new byte[8192];
+    
+    public ArraySegment<byte> Serialize<T>(T packet)
+    {
+        var length = MessagePackSerializer.Serialize(
+            _sharedBuffer.AsMemory(),
+            packet
+        );
+        
+        return new ArraySegment<byte>(_sharedBuffer, 0, length);
+    }
+}
+```
+
+### 통신 메트릭
+
+```csharp
+public class NetworkMetrics
+{
+    public int PacketsSent { get; set; }
+    public int PacketsReceived { get; set; }
+    public long BytesSent { get; set; }
+    public long BytesReceived { get; set; }
+    public float AverageLatency { get; set; }
+    public int PacketLoss { get; set; }
+    
+    public void RecordSent(int bytes)
+    {
+        PacketsSent++;
+        BytesSent += bytes;
+    }
+    
+    public void RecordReceived(int bytes, float latency)
+    {
+        PacketsReceived++;
+        BytesReceived += bytes;
+        
+        // Moving average
+        AverageLatency = (AverageLatency * 0.9f) + (latency * 0.1f);
+    }
+}
+```
+
+---
+
+## 🔄 핵심 흐름: Command → Event
+
+### 플레이어 이동 시나리오 (상세)
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant GS as Game Server
+    autonumber
+    participant U as Unity Client
+    participant N as NetworkClient
+    participant T as TCP Server
+    participant P as PacketProcessor
+    participant G as GameLoop
+    participant W as World (Memory)
     participant K as Kafka
     participant PS as Platform Server
     participant DB as Database
     
-    Note over C,GS: Command Pattern (동기)
-    C->>GS: MoveCommand(newPos)
-    GS->>GS: Validate Authority
-    alt Valid
-        GS->>GS: Update Memory State
-        GS->>C: MoveResponse(accepted)
-    else Invalid
-        GS->>C: MoveResponse(rejected)
+    Note over U: 플레이어가 W키 입력
+    U->>N: OnKeyDown(W)
+    
+    Note over N: MessagePack 직렬화
+    N->>N: Serialize MoveRequestPacket
+    N->>N: Build Frame (Magic + Length + Payload)
+    
+    Note over N,T: TCP/IP 전송
+    N->>T: Send Binary Frame
+    
+    Note over T: Frame 파싱
+    T->>T: Read Magic Number
+    T->>T: Read Payload Length
+    T->>T: Read Payload
+    
+    T->>P: Deserialize MessagePack
+    P->>P: Create MoveCommand
+    
+    Note over P,G: Command Queue에 적재
+    P->>G: EnqueueCommand(moveCmd)
+    
+    Note over G: GameLoop Tick (50ms)
+    G->>G: ProcessCommands()
+    
+    Note over G: 검증 단계
+    G->>G: ValidateMove()<br/>- 거리 체크<br/>- 쿨다운 체크<br/>- 상태 체크
+    
+    alt Valid Move
+        Note over G,W: 상태 변경 (메모리)
+        G->>W: player.Position = newPos
+        W-->>G: State Updated
+        
+        Note over G,K: Domain Event 발행
+        G->>K: Publish PlayerMovedEvent<br/>(Fire-and-Forget)
+        
+        Note over G,T: 응답 생성
+        G->>P: Create MoveResponsePacket<br/>(Accepted=true)
+        P->>T: Serialize & Send
+        
+        Note over T,N: TCP/IP 응답
+        T->>N: Send Binary Frame
+        
+        Note over N: 역직렬화
+        N->>N: Deserialize MoveResponsePacket
+        N->>U: OnMoveConfirmed(serverPos)
+        
+        Note over U: 화면 갱신
+        U->>U: transform.position = serverPos
+        
+        Note over K,PS: 비동기 처리
+        K->>PS: Deliver PlayerMovedEvent
+        PS->>PS: Idempotency Check
+        PS->>DB: INSERT player_movements
+        
+    else Invalid Move
+        G->>P: Create MoveResponsePacket<br/>(Accepted=false, Reason)
+        P->>T: Serialize & Send
+        T->>N: Send Binary Frame
+        N->>U: OnMoveRejected(reason)
+        
+        Note over U: 원위치 유지
     end
     
-    Note over GS,PS: Event Pattern (비동기)
-    GS->>K: PlayerMovedEvent
-    Note over K: Fire-and-Forget<br/>게임은 계속 진행
-    K->>PS: Event Delivery
-    PS->>PS: Idempotency Check
-    PS->>DB: Persist Movement
-    
-    Note over C,DB: 핵심: Kafka 응답을 기다리지 않음!
+    Note over U,DB: ✅ 전체 흐름 완료<br/>클라이언트 RTT: ~100ms<br/>DB 저장: 비동기 (영향 없음)
 ```
+
+### 코드 흐름 (완전한 예시)
+
+```csharp
+// 1. Unity 클라이언트
+void Update()
+{
+    if (Input.GetKeyDown(KeyCode.W))
+    {
+        var newPos = transform.position + Vector3.forward;
+        _networkClient.SendMoveRequest(newPos);  // 비동기 전송
+        
+        // 중요: 즉시 위치 변경하지 않음!
+        // 서버 응답을 기다림
+    }
+}
+
+// 2. 게임 서버 - TCP 수신
+public async Task HandleClientAsync(TcpClient client)
+{
+    var stream = client.GetStream();
+    var frameReader = new FrameReader();
+    
+    while (true)
+    {
+        var payload = await frameReader.ReadFrameAsync(stream);
+        var request = MessagePackSerializer.Deserialize<MoveRequestPacket>(payload);
+        
+        var command = new MoveCommand
+        {
+            PlayerId = request.PlayerId,
+            NewPosition = request.NewPosition,
+            Sequence = request.Header.Sequence
+        };
+        
+        // Command Queue에 적재 (비동기)
+        GameLoop.Instance.EnqueueCommand(command);
+    }
+}
+
+// 3. GameLoop - Command 처리
+public void ProcessCommands()
+{
+    while (_commandQueue.TryDequeue(out var command))
+    {
+        var player = _world.GetPlayer(command.PlayerId);
+        
+        // 검증
+        if (!ValidateMove(player, command.NewPosition))
+        {
+            SendRejection(command);
+            continue;
+        }
+        
+        // 상태 변경 (메모리에서 즉시)
+        var oldPos = player.Position;
+        player.Position = command.NewPosition;
+        
+        // Domain Event 발행 (Fire-and-Forget)
+        _eventPublisher.PublishAsync(new PlayerMovedEvent
+        {
+            EventId = Guid.NewGuid().ToString(),
+            PlayerId = player.Id,
+            FromPosition = oldPos,
+            ToPosition = command.NewPosition,
+            OccurredAt = DateTime.UtcNow
+        });
+        
+        // 클라이언트 응답 (Kafka 응답 기다리지 않음!)
+        SendResponse(command, player.Position);
+    }
+}
+
+// 4. Kafka Producer
+public async Task PublishAsync(DomainEvent evt)
+{
+    try
+    {
+        var data = MessagePackSerializer.Serialize(evt);
+        
+        _ = _producer.ProduceAsync("game.events.player", new Message
+        {
+            Key = evt.AggregateId,
+            Value = data
+        });
+        
+        // 중요: await 하지 않음 (Fire-and-Forget)
+    }
+    catch (Exception ex)
+    {
+        // Kafka 실패 시 메모리 버퍼에 임시 저장
+        _eventBuffer.Add(evt);
+    }
+}
+
+// 5. 플랫폼 서버 - Event 소비
+public async Task HandleEvent(PlayerMovedEvent evt)
+{
+    // Idempotency 검증
+    var key = $"event:{evt.EventId}";
+    if (await _redis.ExistsAsync(key))
+    {
+        return; // 이미 처리됨
+    }
+    
+    // DB 저장
+    await _db.InsertAsync(new PlayerMovement
+    {
+        PlayerId = evt.PlayerId,
+        FromPosition = evt.FromPosition,
+        ToPosition = evt.ToPosition,
+        OccurredAt = evt.OccurredAt
+    });
+    
+    // 처리 완료 기록
+    await _redis.SetAsync(key, "processed", TimeSpan.FromHours(1));
+}
+```
+
+**핵심 포인트**:
+1. 게임 서버는 Kafka 응답을 기다리지 않음
+2. 상태는 메모리에서 이미 확정됨
+3. 기록 실패가 게임플레이를 막지 않음
+4. MessagePack으로 네트워크 오버헤드 최소화
+5. Frame 프로토콜로 패킷 경계 명확화
 
 ---
 
@@ -267,162 +869,6 @@ graph TB
 **설계 철학**: 
 > "게임플레이는 어떤 백엔드 장애에도 멈추지 않는다"
 
-### 복구 전략
-
-```mermaid
-graph TD
-    CRASH[Game Server Crash] --> TRY_HOT{Redis Available?}
-    
-    TRY_HOT -->|Yes| HOT_RECOVER[Hot Snapshot Recovery<br/>RTO: 10초]
-    TRY_HOT -->|No| TRY_COLD{MongoDB Available?}
-    
-    TRY_COLD -->|Yes| COLD_RECOVER[Cold Snapshot Recovery<br/>RTO: 2-3분]
-    TRY_COLD -->|No| EVENT_REPLAY[Event Replay<br/>RTO: 수분~수십분]
-    
-    HOT_RECOVER --> ONLINE[서비스 재개]
-    COLD_RECOVER --> ONLINE
-    EVENT_REPLAY --> ONLINE
-    
-    style CRASH fill:#DC143C,stroke:#8B0000,color:#fff
-    style HOT_RECOVER fill:#90EE90,stroke:#228B22
-    style COLD_RECOVER fill:#FFA07A,stroke:#FF4500
-    style EVENT_REPLAY fill:#FFB6C1,stroke:#DC143C
-    style ONLINE fill:#4169E1,stroke:#00008B,color:#fff
-
-
-```
-
-**증거 코드**:
-
-```csharp
-public class GameServerRecovery
-{
-    public async Task<RecoveryResult> Recover(string zoneId)
-    {
-        // 1. Hot Snapshot 시도
-        var hotSnapshot = await _redis.LoadSnapshot(zoneId);
-        if (hotSnapshot != null)
-        {
-            Logger.Info("Recovered from Redis in 10s");
-            return RecoveryResult.FromHotSnapshot(hotSnapshot);
-        }
-
-        // 2. Cold Snapshot 시도
-        var coldSnapshot = await _mongo.LoadSnapshot(zoneId);
-        if (coldSnapshot != null)
-        {
-            Logger.Info("Recovered from MongoDB in 2~3min");
-            return RecoveryResult.FromColdSnapshot(coldSnapshot);
-        }
-
-        // 3. Event Replay
-        Logger.Warn("No snapshot found, replaying events");
-        var events = await _kafka.ReplayEvents(zoneId);
-        return RecoveryResult.FromEventReplay(events);
-    }
-}
-```
-
----
-
-## 🔄 핵심 흐름: Command → Event
-
-### 플레이어 이동 시나리오
-
-```csharp
-// 1. 클라이언트 요청
-client.SendMoveRequest(newPosition);
-
-// 2. 서버 검증 & 판정
-public void ProcessMove(MoveCommand cmd)
-{
-    var player = GetPlayer(cmd.PlayerId);
-    
-    // 검증 (서버 권한)
-    if (!ValidateMove(cmd, player))
-    {
-        SendRejection(cmd.PlayerId, "Invalid move");
-        return;
-    }
-    
-    // 상태 변경 (메모리에서 즉시)
-    var oldPos = player.Position;
-    player.Position = cmd.NewPosition;
-    
-    // Domain Event 발행 (비동기, Fire-and-Forget)
-    PublishEvent(new PlayerMovedEvent
-    {
-        EventId = Guid.NewGuid(),
-        PlayerId = player.Id,
-        FromPosition = oldPos,
-        ToPosition = cmd.NewPosition,
-        OccurredAt = DateTime.UtcNow
-    });
-    
-    // 즉시 응답 (Kafka 응답 기다리지 않음!)
-    SendResponse(cmd.PlayerId, player.Position);
-}
-
-// 3. 플랫폼 서버 처리 (별도 프로세스)
-public async Task HandlePlayerMoved(PlayerMovedEvent evt)
-{
-    // Idempotency 검증
-    if (await IsProcessed(evt.EventId))
-        return;
-    
-    // DB 영속화
-    await _db.SaveMovement(evt);
-    
-    // 처리 완료 기록
-    await MarkProcessed(evt.EventId);
-}
-```
-
-```mermaid
-
-sequenceDiagram
-    autonumber
-    participant C as Unity Client
-    participant GS as Game Server
-    participant M as Memory State
-    participant K as Kafka
-    participant PS as Platform Server
-    participant DB as Database
-    
-    Note over C: Player presses W key
-    C->>GS: MoveCommand(playerId, newPosition)
-    
-    Note over GS: Server Authority
-    GS->>GS: Validate Move<br/>(충돌, 속도, 치트)
-    
-    alt Valid Move
-        GS->>M: Update player.Position
-        Note over M: 상태 변경 완료<br/>(메모리에서 즉시)
-        
-        GS->>K: Publish PlayerMovedEvent<br/>(Fire-and-Forget)
-        Note over GS,K: 비동기! Kafka 응답 안 기다림
-        
-        GS->>C: MoveResponse(success, newPosition)
-        Note over C: 화면 업데이트
-        
-        K->>PS: Deliver Event
-        PS->>PS: Idempotency Check<br/>(eventId 중복 확인)
-        PS->>DB: Save Movement History
-        
-    else Invalid Move
-        GS->>C: MoveResponse(rejected, reason)
-        Note over C: 이동 취소, 원위치
-    end
-    
-    Note over GS,DB: 중요: DB 저장 실패가 게임플레이를 막지 않음
-
-```
-
-**핵심 포인트**:
-1. 게임 서버는 Kafka 응답을 기다리지 않음
-2. 상태는 메모리에서 이미 확정됨
-3. 기록 실패가 게임플레이를 막지 않음
-
 ---
 
 ## 📈 확장 시나리오
@@ -455,74 +901,38 @@ graph TB
     
     style Z1 fill:#E8F4F8,stroke:#4A90E2
     style COORD fill:#FFB6C1,stroke:#DC143C,stroke-width:3px
-
 ```
-
-### B2B 비즈니스 모델 확장
-
-```mermaid
-graph LR
-    subgraph "Core Game Engine"
-        CORE[Game Server Core<br/>변경 없음]
-    end
-    
-    subgraph "Event Stream"
-        KAFKA[Kafka Topics]
-    end
-    
-    subgraph "Tenant A"
-        PA[Platform A<br/>커스텀 로직]
-        DBA[(Database A)]
-    end
-    
-    subgraph "Tenant B"
-        PB[Platform B<br/>커스텀 로직]
-        DBB[(Database B)]
-    end
-    
-    subgraph "Tenant C"
-        PC[Platform C<br/>커스텀 로직]
-        DBC[(Database C)]
-    end
-    
-    CORE -->|Standard Events| KAFKA
-    KAFKA --> PA
-    KAFKA --> PB
-    KAFKA --> PC
-    PA --> DBA
-    PB --> DBB
-    PC --> DBC
-    
-    style CORE fill:#4169E1,stroke:#00008B,stroke-width:3px,color:#fff
-    style KAFKA fill:#FFA07A,stroke:#FF4500
-
-```
-
-**핵심**: 게임 서버 코드 수정 없이 확장 가능
 
 ---
 
 ## 🛠️ 기술 스택
 
 ### 게임 서버 (C#)
-- **언어**: C#
+- **언어**: C# 12 / .NET 8.0
 - **프로토콜**: TCP/IP
-- **직렬화**: MessagePack
+- **직렬화**: MessagePack 2.5+
 - **패턴**: Command Pattern, Event Sourcing
-- **캐시**: Redis (Hot Snapshot)
-- **이벤트**: Kafka Producer
+- **캐시**: StackExchange.Redis
+- **이벤트**: Confluent.Kafka
 
 ### 플랫폼 서버 (TypeScript)
-- **런타임**: bun.js
-- **프레임워크**: ElysiaJS
-- **ORM**: Drizzle
-- **DB**: MySQL (정형), MongoDB (비정형)
-- **이벤트**: Kafka Consumer
+- **런타임**: bun.js 1.0+
+- **프레임워크**: ElysiaJS 0.8+
+- **ORM**: Drizzle ORM
+- **DB**: MySQL 8.0 (정형), MongoDB 7.0 (비정형)
+- **이벤트**: KafkaJS 2.2+
 
 ### 클라이언트 (Unity)
 - **엔진**: Unity 2022.3 LTS
 - **구조**: Server-authoritative
 - **프로토콜**: TCP Socket
+- **직렬화**: MessagePack for C#
+
+### 인프라
+- **메시지 큐**: Apache Kafka 3.6+
+- **캐시**: Redis 7.2+
+- **스토리지**: MongoDB 7.0, MySQL 8.0
+- **컨테이너**: Docker / Docker Compose
 
 ---
 
@@ -536,98 +946,6 @@ graph LR
 | [구현 로드맵](docs/implementation-roadmap.md) ⭐ | 단계별 구현 계획 | 개발자, PM |
 | [기술 스택 가이드](docs/tech-stack-guide.md) | 언어별 구현 예시 | 개발자 |
 | [다이어그램](docs/diagrams.md) | 시스템 시각화 자료 | 모든 이해관계자 |
-
----
-
-## 🗺️ 구현 로드맵
-
-```
-Phase 0: 설계 확정               ✅ 완료
-Phase 1: MVP 구현 (핵심 흐름)     🔄 진행 예정
-Phase 2: 이벤트 신뢰성            📋 계획
-Phase 3: Hot/Cold Snapshot       📋 계획
-Phase 4: 운영 도구 구현           📋 계획
-```
-
-**예상 완료 기간**: 3~4주 (Phase 1 MVP까지는 1~2주)
-
-### MVP 범위
-
-**포함**:
-- ✅ TCP 게임 서버 (C#)
-- ✅ Command → Domain → Event 흐름
-- ✅ Kafka Producer/Consumer
-- ✅ 간단한 상태 변경 (이동)
-- ✅ TypeScript 플랫폼 서버
-- ✅ Unity 테스트 클라이언트
-
-**의도적으로 제외**:
-- ❌ 전투 시스템
-- ❌ 복잡한 게임 콘텐츠
-- ❌ 완전한 매치메이킹
-- ❌ 운영 대시보드 (Phase 4에서 구현)
-
-**왜 여기서 멈췄는가?**
-
-> "더 만들 수 있다"가 아니라 **"언제 멈춰야 하는지 안다"**를 증명하기 위해
-
----
-
-## 🎨 Phase 4: Admin Dashboard
-
-### React 기반 운영 도구 구현
-
-**관련 프로젝트**: [React Object State Manager](https://github.com/1985jwlee/portpolio_react)
-
-Phase 4에서는 설계된 Admin Dashboard를 실제로 구현합니다.
-
-#### 구현 예정 기능
-
-```
-1. 실시간 모니터링
-   - Zone별 동접자 수 (CCU)
-   - GameLoop Tick 지연 모니터링
-   - 서버 Health Check 현황
-
-2. 플레이어 상태 조회
-   - 플레이어별 오브젝트 상태
-   - Component 필드값 실시간 조회
-   - 상태 변경 이력
-
-3. Event Stream 시각화
-   - Kafka Topic별 이벤트 흐름
-   - Consumer Lag 모니터링
-   - 이벤트 처리 속도
-
-4. 장애 대응 인터페이스
-   - Snapshot 복구 트리거
-   - 서버 재시작 컨트롤
-   - 긴급 공지 발송
-
-5. Snapshot 관리
-   - Hot/Cold Snapshot 조회
-   - 수동 Snapshot 생성
-   - 복구 테스트
-```
-
-#### 기술 스택
-
-```
-Frontend: React 19 + TypeScript
-State: Zustand (전역 상태 관리)
-UI: Tailwind CSS
-Real-time: WebSocket (Server → Client)
-API: REST (Client → Server)
-```
-
-#### React 프로토타입에서 검증된 것
-
-- ✅ 동적 오브젝트 상태 관리
-- ✅ Component 기반 필드 편집
-- ✅ 상태 저장/복원 메커니즘
-- ✅ Snapshot 관리 UI
-
-이 프로토타입을 기반으로 실제 Admin Dashboard를 구현합니다.
 
 ---
 
@@ -648,6 +966,11 @@ API: REST (Client → Server)
    - 사용자 2배 → 비용 2배가 이상적
    - 비선형 확장은 지속 불가능
 
+4. **프로토콜은 명확해야 한다**
+   - Binary 직렬화로 성능 확보
+   - Frame 프로토콜로 패킷 경계 명확화
+   - 타입 안정성으로 버그 예방
+
 **조직 관점 교훈**:
 1. **문서화는 필수다**
    - 개인의 지식은 조직에 남지 않음
@@ -667,18 +990,18 @@ API: REST (Client → Server)
 
 이 설계 원칙은 다른 도메인에도 적용 가능합니다:
 
-### 🎨 [Coin Data API — Platform Server in Practice](https://github.com/1985jwlee/portpolio_coindataapi)
+### 📊 [Coin Data API Platform](https://github.com/1985jwlee/portpolio_coindataapi)
 
-**동일한 원칙의 비게임 도메인 적용 사례**
+**동일한 원칙의 금융/핀테크 도메인 적용 사례**
 
 | 원칙 | 게임 서버 (본 프로젝트) | Coin API |
 |------|----------------------|----------|
-| **외부 격리** | DB 장애 시 게임 진행 | 거래소 API 장애 시 제한 제공 |
+| **외부 격리** | DB 장애 시 게임 진행 | 거래소 API 장애 시 캐시 제공 |
 | **정규화 계층** | Event → DB Schema | External API → Internal Schema |
 | **계약 안정성** | 운영 API 불변 | 클라이언트 API 불변 |
-| **비동기 처리** | Kafka Event Stream | WebSocket Stream |
+| **비동기 처리** | Kafka Event Stream | WebSocket → Queue → Cache |
 
-### 🎨 [React Object State Manager](https://github.com/1985jwlee/portpolio_react)
+### 🎨 [React State Manager](https://github.com/1985jwlee/portpolio_react)
 
 **Admin Dashboard 프로토타입**
 
@@ -695,15 +1018,10 @@ API: REST (Client → Server)
 
 ## 📧 Contact
 
-**Portfolio**: [GitHub Repository](https://github.com/1985jwlee)  
-**Email**: [leejae.w.jl@icloud.com]  
-**Blog**: [기술 블로그]
+**GitHub**: [@1985jwlee](https://github.com/1985jwlee)  
+**Email**: leejae.w.jl@icloud.com
 
----
-
-## 📝 License
-
-이 문서는 설계 포트폴리오로, 학습 및 평가 목적으로 공개되었습니다.
+> 💡 포트폴리오에 대한 질문이나 피드백은 각 저장소의 Issues를 활용해주세요.
 
 ---
 
@@ -719,6 +1037,7 @@ API: REST (Client → Server)
 ✅ 확장 가능한 아키텍처 설계  
 ✅ 운영 가능성까지 고려한 시스템 설계  
 ✅ 조직에 남는 시스템을 만드는 사고방식  
+✅ Binary 프로토콜 설계와 최적화 능력  
 
 ### 검증 방법:
 
@@ -729,7 +1048,7 @@ API: REST (Client → Server)
 
 ---
 
-**Last Updated**: 2025-01-15  
+**Last Updated**: 2025-01-22  
 
 **Note**: 이 포트폴리오는 실제 게임 출시를 목적으로 하지 않으며,  
 **시스템 설계 판단력과 아키텍처 사고**를 증명하기 위한 자료입니다.
