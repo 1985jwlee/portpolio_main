@@ -2,25 +2,25 @@
 
 [← 메인으로 돌아가기](../README.md)
 
----
+-----
 
 ## 📋 목차
 
 1. [전체 목표](#전체-목표)
-2. [로드맵 개요](#로드맵-개요)
-3. [Phase 0: 설계 확정](#phase-0-설계-확정)
-4. [Phase 1: MVP 구현](#phase-1-mvp-구현)
-5. [Phase 2: 이벤트 신뢰성](#phase-2-이벤트-신뢰성)
-6. [Phase 3: Snapshot](#phase-3-snapshot)
-7. [Phase 4: 문서 정리](#phase-4-문서-정리)
+1. [로드맵 개요](#로드맵-개요)
+1. [Phase 0: 설계 확정](#phase-0-설계-확정)
+1. [Phase 1: MVP 구현](#phase-1-mvp-구현)
+1. [Phase 2: 이벤트 신뢰성](#phase-2-이벤트-신뢰성)
+1. [Phase 3: Snapshot](#phase-3-snapshot)
+1. [Phase 4: Admin Dashboard](#phase-4-admin-dashboard)
 
----
+-----
 
 ## 전체 목표
 
 ### 핵심 목표
 
-> **"실시간 판정은 메모리에서 끝나고, 기록과 복구는 비동기로 흡수되는 구조를 실제로 증명한다."**
+> **“실시간 판정은 메모리에서 끝나고, 기록과 복구는 비동기로 흡수되는 구조를 실제로 증명한다.”**
 
 ### 이 포트폴리오는
 
@@ -33,7 +33,7 @@
 ✓ 최소 구현으로 증명하는 것이 목적입니다
 ```
 
----
+-----
 
 ## 로드맵 개요
 
@@ -42,36 +42,38 @@ Phase 0. 설계 확정 (문서)              ✅ 완료
 Phase 1. MVP 구현 (핵심 흐름)          🔄 진행 예정
 Phase 2. 이벤트 신뢰성                  📋 계획
 Phase 3. Hot/Cold Snapshot             📋 계획
-Phase 4. 포트폴리오 정리                📋 계획
+Phase 4. Admin Dashboard               📋 계획
 ```
 
 ### 전체 타임라인
 
-| Phase | 내용 | 예상 소요 | 상태 |
-|-------|------|----------|------|
-| Phase 0 | 설계 확정 | 1~2일 | ✅ 완료 |
-| Phase 1 | MVP 구현 | 1~2주 | 🔄 진행 예정 |
-| Phase 2 | 이벤트 신뢰성 | 3~5일 | 📋 계획 |
-| Phase 3 | Snapshot | 4~7일 | 📋 계획 |
-| Phase 4 | 문서 정리 | 2~3일 | 📋 계획 |
+|Phase  |내용             |예상 소요|상태     |
+|-------|---------------|-----|-------|
+|Phase 0|설계 확정          |1~2일 |✅ 완료   |
+|Phase 1|MVP 구현         |1~2주 |🔄 진행 예정|
+|Phase 2|이벤트 신뢰성        |3~5일 |📋 계획   |
+|Phase 3|Snapshot       |4~7일 |📋 계획   |
+|Phase 4|Admin Dashboard|3~5일 |📋 계획   |
 
 **총 예상 기간**: 약 3~4주
 
----
+-----
 
 ## Phase 0: 설계 확정
 
 ### ✅ 완료
 
-**목적**: "이 시스템은 이렇게 만들기로 결정했다"는 기준을 고정
+**목적**: “이 시스템은 이렇게 만들기로 결정했다”는 기준을 고정
 
 **산출물**:
+
 - ✅ 최종 아키텍처 설계 문서
 - ✅ 설계 원칙 명문화
 - ✅ 대안 비교와 선택 이유
 - ✅ 운영 관점 설계
 
 **확정된 설계 원칙**:
+
 ```
 ✓ Server-authoritative 구조
 ✓ Packet → Command → Domain → Event 흐름
@@ -81,7 +83,7 @@ Phase 4. 포트폴리오 정리                📋 계획
 
 **이 단계는 이후 모든 구현 판단의 기준선이 됩니다.**
 
----
+-----
 
 ## Phase 1: MVP 구현
 
@@ -91,7 +93,7 @@ Phase 4. 포트폴리오 정리                📋 계획
 
 **예상 소요**: 1~2주
 
----
+-----
 
 ### 1-1. 게임 서버 (C# TCP/IP)
 
@@ -110,6 +112,7 @@ Phase 4. 포트폴리오 정리                📋 계획
 #### 반드시 포함할 최소 기능
 
 **1. 플레이어 접속**
+
 ```csharp
 public void OnPlayerConnect(Session session)
 {
@@ -125,6 +128,7 @@ public void OnPlayerConnect(Session session)
 ```
 
 **2. 간단한 상태 변경 (위치 변경)**
+
 ```csharp
 public void ProcessMoveCommand(MoveCommand cmd)
 {
@@ -179,7 +183,7 @@ public void ProcessMoveCommand(MoveCommand cmd)
 ☐ 로그 출력
 ```
 
----
+-----
 
 ### 1-2. 플랫폼 서버 (TypeScript / bun.js)
 
@@ -237,7 +241,7 @@ class EventConsumer {
 ☐ 간단한 API 엔드포인트 (선택)
 ```
 
----
+-----
 
 ### 1-3. Unity 클라이언트 (증명용 테스트 클라이언트)
 
@@ -294,7 +298,7 @@ Unity 클라이언트:
 ☐ Debug 로그 출력
 ```
 
----
+-----
 
 ### MVP 단계에서 증명되는 것
 
@@ -307,7 +311,7 @@ Unity 클라이언트:
 
 **이 단계까지가 MVP이며, 여기까지만으로도 포트폴리오로 충분한 설득력을 가집니다.**
 
----
+-----
 
 ### Phase 1 완료 조건
 
@@ -322,17 +326,17 @@ Unity 클라이언트:
 ☐ 1분 영상 녹화
 ```
 
----
+-----
 
 ## Phase 2: 이벤트 신뢰성
 
 ### 📋 계획
 
-**목적**: Kafka 기반 구조에서 반드시 질문받게 되는 "이벤트 신뢰성"에 대한 답을 제시
+**목적**: Kafka 기반 구조에서 반드시 질문받게 되는 “이벤트 신뢰성”에 대한 답을 제시
 
 **예상 소요**: 3~5일
 
----
+-----
 
 ### 2-1. Domain Event 확장
 
@@ -355,7 +359,7 @@ public class PlayerMovedEvent : DomainEvent
 }
 ```
 
----
+-----
 
 ### 2-2. 플랫폼 서버 처리 전략
 
@@ -387,7 +391,7 @@ class IdempotentEventHandler {
 }
 ```
 
----
+-----
 
 ### 2-3. DLQ (Dead Letter Queue)
 
@@ -411,7 +415,7 @@ class IdempotentEventHandler {
 ✓ 실패 처리는 전적으로 운영 영역의 책임
 ```
 
----
+-----
 
 ### Phase 2 완료 조건
 
@@ -424,7 +428,7 @@ class IdempotentEventHandler {
 ☐ 테스트: 동일 이벤트 2번 전송 시 1번만 처리
 ```
 
----
+-----
 
 ## Phase 3: Snapshot
 
@@ -434,7 +438,7 @@ class IdempotentEventHandler {
 
 **예상 소요**: 4~7일
 
----
+-----
 
 ### 3-1. Hot Snapshot (Redis)
 
@@ -456,27 +460,28 @@ public class RedisSnapshotService
     }
     
     // 복구
-    public async Task LoadHotSnapshot(string playerId)
+    public async Task<Player> LoadHotSnapshot(string playerId)
     {
         var key = $"snapshot:player:{playerId}";
-        var snapshot = await _redis.GetAsync(key);
+        var snapshot = await _redis.GetAsync<byte[]>(key);
         
         if (snapshot == null)
             return null;
         
-        return MessagePackSerializer.Deserialize(snapshot);
+        return MessagePackSerializer.Deserialize<Player>(snapshot);
     }
 }
 ```
 
 **특징**:
+
 ```
 ✓ 정확성보다 속도를 우선
 ✓ TTL로 자동 정리
 ✓ 수초 내 복구 가능
 ```
 
----
+-----
 
 ### 3-2. Cold Snapshot (MongoDB)
 
@@ -498,7 +503,7 @@ public class MongoSnapshotService
     }
     
     // 복구
-    public async Task LoadColdSnapshot(string zoneId)
+    public async Task<ZoneSnapshot> LoadColdSnapshot(string zoneId)
     {
         var snapshot = await _mongo
             .Find(s => s.ZoneId == zoneId)
@@ -511,13 +516,14 @@ public class MongoSnapshotService
 ```
 
 **특징**:
+
 ```
 ✓ 장기 보관
 ✓ 정합성 검증 (Checksum)
 ✓ 점검 및 분석 용도
 ```
 
----
+-----
 
 ### 3-3. 복구 시나리오
 
@@ -538,7 +544,7 @@ public class MongoSnapshotService
    (Kafka Event Replay로 보정 가능)
 ```
 
----
+-----
 
 ### Phase 3 완료 조건
 
@@ -551,125 +557,171 @@ public class MongoSnapshotService
 ☐ 테스트: 게임 서버 재시작 후 플레이어 상태 복원
 ```
 
----
+-----
 
-## Phase 4: 문서 정리
+## Phase 4: Admin Dashboard
 
 ### 📋 계획
 
-**목적**: 포트폴리오로서의 완결성 확보
+**목적**: 운영 도구를 실제로 구현하여 시스템의 운영 가능성을 증명
 
-**예상 소요**: 2~3일
+**예상 소요**: 3~5일
 
----
+-----
 
-### 4-1. 반드시 명시해야 할 것
+### 4-1. React 기반 운영 도구 구현
 
-```markdown
-## 구현 범위
+**관련 프로젝트**: [React Object State Manager](https://github.com/1985jwlee/portpolio_react)
 
-### ✅ 구현 완료
-- Game Server (C#): TCP, Session, GameLoop, Domain Event
-- Platform Server (TypeScript): Kafka Consumer, DB Persistence
-- Unity Client: Server-authoritative 증명용 테스트 클라이언트
-- Event Idempotency & DLQ
-- Hot/Cold Snapshot
+Phase 4에서는 설계된 Admin Dashboard를 실제로 구현합니다.
 
-### 📋 의도적으로 구현하지 않은 것
-- 전투 시스템
-- 복잡한 게임 콘텐츠
-- 클라이언트 예측
-- 완전한 매치메이킹
-- 운영 대시보드 (설계만)
+#### 구현 예정 기능
 
-### 🎯 왜 여기서 멈췄는가?
+```
+1. 실시간 모니터링
+   - Zone별 동접자 수 (CCU)
+   - GameLoop Tick 지연 모니터링
+   - 서버 Health Check 현황
 
-**이 포트폴리오는 대규모 MMO 구현을 목표로 하지 않았습니다.**
+2. 플레이어 상태 조회
+   - 플레이어별 오브젝트 상태
+   - Component 필드값 실시간 조회
+   - 상태 변경 이력
 
-실시간 판정, 이벤트 기반 확장, 장애 흡수 구조를 증명하는 데 
-필요한 최소 구현까지만 진행했습니다.
+3. Event Stream 시각화
+   - Kafka Topic별 이벤트 흐름
+   - Consumer Lag 모니터링
+   - 이벤트 처리 속도
 
-추가 기능은 "더 만들 수 있다"가 아니라 
-"언제 멈춰야 하는지 안다"를 증명하기 위해 의도적으로 제외했습니다.
+4. 장애 대응 인터페이스
+   - Snapshot 복구 트리거
+   - 서버 재시작 컨트롤
+   - 긴급 공지 발송
+
+5. Snapshot 관리
+   - Hot/Cold Snapshot 조회
+   - 수동 Snapshot 생성
+   - 복구 테스트
 ```
 
----
+#### 기술 스택
 
-### 4-2. 실행 가이드 작성
-
-```markdown
-# 로컬 실행 가이드
-
-## 필요 환경
-- .NET 8.0
-- bun.js
-- Unity 2022.3 LTS
-- Docker (Kafka, Redis, MongoDB, MySQL)
-
-## 1. 인프라 시작
-```bash
-docker-compose up -d
+```
+Frontend: React 19 + TypeScript
+State: Zustand (전역 상태 관리)
+UI: Tailwind CSS
+Real-time: WebSocket (Server → Client)
+API: REST (Client → Server)
 ```
 
-## 2. 게임 서버 시작
-```bash
-cd game-server
-dotnet run
+#### React 프로토타입에서 검증된 것
+
+- ✅ 동적 오브젝트 상태 관리
+- ✅ Component 기반 필드 편집
+- ✅ 상태 저장/복원 메커니즘
+- ✅ Snapshot 관리 UI
+
+이 프로토타입을 기반으로 실제 Admin Dashboard를 구현합니다.
+
+-----
+
+### 4-2. 플랫폼 서버 WebSocket API
+
+```typescript
+import { Elysia } from 'elysia';
+import { ws } from '@elysiajs/websocket';
+
+const app = new Elysia()
+  .use(ws())
+  .ws('/ws/monitor', {
+    open(ws) {
+      // 실시간 모니터링 스트림 시작
+      const interval = setInterval(() => {
+        ws.send({
+          type: 'metrics',
+          data: {
+            ccu: getCurrentCCU(),
+            tickDelay: getAverageTickDelay(),
+            eventRate: getEventRate()
+          }
+        });
+      }, 1000);
+      
+      ws.data.interval = interval;
+    },
+    close(ws) {
+      clearInterval(ws.data.interval);
+    }
+  });
 ```
 
-## 3. 플랫폼 서버 시작
-```bash
-cd platform-server
-bun install
-bun run dev
+-----
+
+### 4-3. Dashboard 핵심 컴포넌트
+
+```tsx
+// 실시간 서버 상태 모니터
+function ServerMonitor() {
+  const [metrics, setMetrics] = useState<Metrics>();
+  
+  useEffect(() => {
+    const ws = new WebSocket('ws://localhost:3000/ws/monitor');
+    
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'metrics') {
+        setMetrics(data.data);
+      }
+    };
+    
+    return () => ws.close();
+  }, []);
+  
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      <MetricCard
+        title="CCU"
+        value={metrics?.ccu || 0}
+        status={metrics?.ccu > 1000 ? 'warning' : 'normal'}
+      />
+      <MetricCard
+        title="Tick Delay"
+        value={`${metrics?.tickDelay || 0}ms`}
+        status={metrics?.tickDelay > 70 ? 'warning' : 'normal'}
+      />
+      <MetricCard
+        title="Event Rate"
+        value={`${metrics?.eventRate || 0}/s`}
+      />
+    </div>
+  );
+}
 ```
 
-## 4. Unity 클라이언트 실행
-- Unity에서 GameScene 실행
-- WASD로 이동 테스트
-```
-
----
-
-### 4-3. 데모 영상 녹화
-
-**시나리오**:
-```
-1. 게임 서버 시작 (터미널)
-2. 플랫폼 서버 시작 (터미널)
-3. Unity 클라이언트 실행
-4. WASD로 이동
-5. 서버 로그에서 이벤트 확인
-6. DB에서 기록 확인
-```
-
-**길이**: 1~2분
-
-**형식**: MP4, 1080p
-
----
+-----
 
 ### Phase 4 완료 조건
 
 ```
-☐ README 최종 검토
-☐ 실행 가이드 작성
+☐ WebSocket API 구현
+☐ React Dashboard 구현
+☐ 실시간 모니터링 기능
+☐ 플레이어 상태 조회
+☐ Snapshot 관리 UI
 ☐ 데모 영상 녹화
-☐ GitHub 정리
-☐ 코드 주석 추가
-☐ 라이선스 파일
+☐ 실행 가이드 작성
 ```
 
----
+-----
 
 ## 가장 중요한 결론
 
-> **이 로드맵의 목적은 "완성"이 아닙니다.**
+> **이 로드맵의 목적은 “완성”이 아닙니다.**
 
-> **"이 사람은 언제 구현을 멈춰야 하는지도 아는 엔지니어다"**
+> **“이 사람은 언제 구현을 멈춰야 하는지도 아는 엔지니어다”**
 
 > **이 인상을 남기는 것이 핵심입니다.**
 
----
+-----
 
 [← 메인으로 돌아가기](../README.md)
