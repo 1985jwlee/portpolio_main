@@ -19,7 +19,7 @@
 
 ```
 GameServer/
-├── Program.cs                      # 진입점
+├── Program.cs
 ├── Network/
 │   ├── TcpServer.cs               # TCP 서버
 │   ├── Session.cs                 # 클라이언트 세션
@@ -29,18 +29,18 @@ GameServer/
 │   ├── GameTick.cs                # 메인 게임 루프
 │   └── CommandQueue.cs            # Command 큐
 ├── Domain/
-│   ├── Player.cs                  # 플레이어 도메인
-│   ├── World.cs                   # 게임 월드
+│   ├── Player.cs
+│   ├── World.cs
 │   └── Commands/
 │       ├── MoveCommand.cs
 │       └── ICommand.cs
 ├── Events/
-│   ├── DomainEvent.cs             # 이벤트 베이스
+│   ├── DomainEvent.cs
 │   ├── PlayerMovedEvent.cs
 │   └── EventPublisher.cs          # Kafka 발행
 └── Infrastructure/
-    ├── RedisClient.cs             # Redis 연동
-    └── KafkaProducer.cs           # Kafka 연동
+    ├── RedisClient.cs
+    └── KafkaProducer.cs
 ```
 
 ### 핵심 구현
@@ -48,51 +48,52 @@ GameServer/
 #### 1. TCP 서버
 
 ```csharp
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+
 public class TcpServer
 {
     private readonly TcpListener _listener;
-    private readonly Dictionary _sessions = new();
-    
+    private readonly ConcurrentDictionary<string, Session> _sessions = new();
+
     public TcpServer(string host, int port)
     {
         _listener = new TcpListener(IPAddress.Parse(host), port);
     }
-    
+
     public async Task StartAsync()
     {
         _listener.Start();
         Console.WriteLine($"[Server] Listening on {_listener.LocalEndpoint}");
-        
+
         while (true)
         {
             var client = await _listener.AcceptTcpClientAsync();
             _ = HandleClientAsync(client); // Fire-and-forget
         }
     }
-    
+
     private async Task HandleClientAsync(TcpClient client)
     {
         var session = new Session(client);
         _sessions[session.Id] = session;
-        
+
         try
         {
             await session.StartReceiveAsync(OnPacketReceived);
         }
         finally
         {
-            _sessions.Remove(session.Id);
+            _sessions.TryRemove(session.Id, out _);
             session.Dispose();
         }
     }
-    
+
     private void OnPacketReceived(Session session, byte[] data)
     {
-        // Packet → Command 변환
-        var packet = MessagePackSerializer.Deserialize(data);
+        var packet = MessagePackSerializer.Deserialize<Packet>(data);
         var command = PacketHandler.ToCommand(packet, session);
-        
-        // Command Queue에 적재
         GameLoop.Instance.EnqueueCommand(command);
     }
 }
@@ -101,40 +102,37 @@ public class TcpServer
 #### 2. 게임 루프
 
 ```csharp
+using System.Collections.Concurrent;
+
 public class GameTick
 {
-    private readonly ConcurrentQueue _commandQueue = new();
+    private readonly ConcurrentQueue<ICommand> _commandQueue = new();
     private readonly World _world = new();
     private readonly EventPublisher _eventPublisher;
     private const int TargetTickRate = 20; // 50ms
-    
+
     public void EnqueueCommand(ICommand command)
     {
         _commandQueue.Enqueue(command);
     }
-    
+
     public async Task RunAsync()
     {
         var interval = TimeSpan.FromMilliseconds(1000.0 / TargetTickRate);
-        
+
         while (true)
         {
             var startTime = DateTime.UtcNow;
-            
-            // 1. Command 처리
+
             ProcessCommands();
-            
-            // 2. World Update
             _world.Update();
-            
-            // 3. Tick 시간 측정
+
             var elapsed = DateTime.UtcNow - startTime;
             if (elapsed > interval)
             {
                 Console.WriteLine($"[Warning] Tick overrun: {elapsed.TotalMilliseconds}ms");
             }
-            
-            // 4. 다음 Tick까지 대기
+
             var delay = interval - elapsed;
             if (delay > TimeSpan.Zero)
             {
@@ -142,20 +140,21 @@ public class GameTick
             }
         }
     }
-    
+
     private void ProcessCommands()
     {
+        // 단일 Tick에서 최대 1,000개 Command 처리
         var processCount = Math.Min(_commandQueue.Count, 1000);
-        
+
         for (int i = 0; i < processCount; i++)
         {
             if (!_commandQueue.TryDequeue(out var command))
                 break;
-            
+
             try
             {
                 var events = command.Execute(_world);
-                
+
                 foreach (var evt in events)
                 {
                     _eventPublisher.PublishAsync(evt);
@@ -177,30 +176,29 @@ public class MoveCommand : ICommand
 {
     public string PlayerId { get; set; }
     public Vector3 NewPosition { get; set; }
-    
-    public List Execute(World world)
+
+    public List<DomainEvent> Execute(World world)
     {
-        var events = new List();
+        var events = new List<DomainEvent>();
         var player = world.GetPlayer(PlayerId);
-        
+
         if (player == null)
         {
             Console.WriteLine($"[Warning] Player not found: {PlayerId}");
             return events;
         }
-        
-        // Validation
+
         if (!ValidateMove(player, NewPosition))
         {
             Console.WriteLine($"[Reject] Invalid move: {PlayerId}");
             return events;
         }
-        
-        // State Change (메모리에서 즉시)
+
+        // 메모리에서 즉시 상태 변경
         var oldPosition = player.Position;
         player.Position = NewPosition;
         player.LastMoveTime = DateTime.UtcNow;
-        
+
         // Domain Event 생성
         events.Add(new PlayerMovedEvent
         {
@@ -211,19 +209,19 @@ public class MoveCommand : ICommand
             FromPosition = oldPosition,
             ToPosition = NewPosition
         });
-        
+
         return events;
     }
-    
+
     private bool ValidateMove(Player player, Vector3 newPosition)
     {
         var distance = Vector3.Distance(player.Position, newPosition);
         if (distance > player.MaxMoveDistance)
             return false;
-        
+
         if (DateTime.UtcNow - player.LastMoveTime < player.MoveCooldown)
             return false;
-        
+
         return true;
     }
 }
@@ -232,10 +230,12 @@ public class MoveCommand : ICommand
 #### 4. Kafka Producer
 
 ```csharp
+using Confluent.Kafka;
+
 public class KafkaProducer
 {
-    private readonly IProducer _producer;
-    
+    private readonly IProducer<string, byte[]> _producer;
+
     public KafkaProducer(string bootstrapServers)
     {
         var config = new ProducerConfig
@@ -244,22 +244,23 @@ public class KafkaProducer
             Acks = Acks.Leader,
             EnableIdempotence = true
         };
-        
-        _producer = new ProducerBuilder(config).Build();
+
+        _producer = new ProducerBuilder<string, byte[]>(config).Build();
     }
-    
-    public async Task PublishAsync(DomainEvent evt)
+
+    public void PublishAsync(DomainEvent evt)
     {
         try
         {
             var data = MessagePackSerializer.Serialize(evt);
-            
-            var message = new Message
+
+            var message = new Message<string, byte[]>
             {
                 Key = evt.AggregateId,
                 Value = data
             };
-            
+
+            // Fire-and-Forget: 응답을 기다리지 않음
             _ = _producer.ProduceAsync("game.events.player", message);
         }
         catch (Exception ex)
@@ -273,11 +274,10 @@ public class KafkaProducer
 ### 필수 패키지
 
 ```xml
-
-  
-  
-  
-
+<PackageReference Include="MessagePack" Version="2.6.*" />
+<PackageReference Include="Confluent.Kafka" Version="2.3.*" />
+<PackageReference Include="StackExchange.Redis" Version="2.7.*" />
+<PackageReference Include="MongoDB.Driver" Version="3.0.*" />
 ```
 
 ---
@@ -289,7 +289,7 @@ public class KafkaProducer
 ```
 platform-server/
 ├── src/
-│   ├── index.ts                   # 진입점
+│   ├── index.ts
 │   ├── kafka/
 │   │   ├── consumer.ts            # Kafka Consumer
 │   │   ├── eventHandler.ts        # 이벤트 처리
@@ -300,7 +300,7 @@ platform-server/
 │   │   │   └── playerRepository.ts
 │   │   └── schema.ts
 │   ├── cache/
-│   │   └── redis.ts               # Redis 클라이언트
+│   │   └── redis.ts
 │   └── api/
 │       ├── server.ts              # Elysia 서버
 │       └── routes/
@@ -321,33 +321,33 @@ export class KafkaConsumer {
   private kafka: Kafka;
   private consumer: Consumer;
   private eventHandler: EventHandler;
-  
+
   constructor(brokers: string[]) {
     this.kafka = new Kafka({
       clientId: 'platform-server',
       brokers: brokers
     });
-    
+
     this.consumer = this.kafka.consumer({
       groupId: 'platform-server-group'
     });
-    
+
     this.eventHandler = new EventHandler();
   }
-  
+
   async start() {
     await this.consumer.connect();
     console.log('[Kafka] Consumer connected');
-    
+
     await this.consumer.subscribe({
       topics: ['game.events.player'],
       fromBeginning: false
     });
-    
+
     await this.consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
         if (!message.value) return;
-        
+
         const event = JSON.parse(message.value.toString());
         await this.eventHandler.handle(event);
       }
@@ -356,7 +356,7 @@ export class KafkaConsumer {
 }
 ```
 
-#### 2. Event Handler
+#### 2. Event Handler (Idempotency 포함)
 
 ```typescript
 import { Redis } from 'ioredis';
@@ -365,38 +365,35 @@ import { PlayerRepository } from '../persistence/repositories/playerRepository';
 export class EventHandler {
   private redis: Redis;
   private playerRepo: PlayerRepository;
-  
+
   constructor() {
     this.redis = new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: 6379
     });
-    
     this.playerRepo = new PlayerRepository();
   }
-  
+
   async handle(event: DomainEvent) {
     // Idempotency 검증
     if (await this.isProcessed(event.eventId)) {
       console.log(`[Event] Already processed: ${event.eventId}`);
       return;
     }
-    
+
     try {
       switch (event.type) {
         case 'PlayerMovedEvent':
-          await this.handlePlayerMoved(event);
+          await this.handlePlayerMoved(event as PlayerMovedEvent);
           break;
       }
-      
       await this.markProcessed(event.eventId);
-      
     } catch (error) {
       console.error(`[Event] Failed: ${event.eventId}`, error);
       await this.sendToDLQ(event, error);
     }
   }
-  
+
   private async handlePlayerMoved(event: PlayerMovedEvent) {
     await this.playerRepo.saveMovement({
       playerId: event.playerId,
@@ -404,17 +401,20 @@ export class EventHandler {
       toPosition: event.toPosition,
       occurredAt: event.occurredAt
     });
-    
-    console.log(`[Event] Player moved: ${event.playerId}`);
   }
-  
-  private async isProcessed(eventId: string): Promise {
+
+  private async isProcessed(eventId: string): Promise<boolean> {
     const exists = await this.redis.exists(`event:${eventId}`);
     return exists === 1;
   }
-  
-  private async markProcessed(eventId: string): Promise {
-    await this.redis.setex(`event:${eventId}`, 3600, 'processed');
+
+  private async markProcessed(eventId: string): Promise<void> {
+    await this.redis.setex(`event:${eventId}`, 3600, 'processed'); // TTL: 1시간
+  }
+
+  private async sendToDLQ(event: DomainEvent, error: unknown): Promise<void> {
+    // DLQ 토픽으로 실패 이벤트 전송 (Phase 2)
+    console.error(`[DLQ] Event ${event.eventId} sent to dead letter queue`);
   }
 }
 ```
@@ -524,9 +524,9 @@ public class NetworkClient : MonoBehaviour
     private TcpClient _client;
     private NetworkStream _stream;
     private bool _isConnected;
-    
-    public event Action OnMoveConfirmed;
-    
+
+    public event Action<Vector3> OnMoveConfirmed;
+
     public async void Connect(string host, int port)
     {
         try
@@ -535,7 +535,7 @@ public class NetworkClient : MonoBehaviour
             await _client.ConnectAsync(host, port);
             _stream = _client.GetStream();
             _isConnected = true;
-            
+
             Debug.Log($"[Network] Connected to {host}:{port}");
             _ = ReceiveLoop();
         }
@@ -544,19 +544,19 @@ public class NetworkClient : MonoBehaviour
             Debug.LogError($"[Network] Connection failed: {ex.Message}");
         }
     }
-    
+
     public void SendMoveRequest(Vector3 newPosition)
     {
         if (!_isConnected) return;
-        
+
         var packet = new MoveRequestPacket
         {
             Type = "MoveRequest",
             NewPosition = newPosition
         };
-        
+
         var data = MessagePackSerializer.Serialize(packet);
-        
+
         try
         {
             _stream.Write(data, 0, data.Length);
@@ -567,18 +567,18 @@ public class NetworkClient : MonoBehaviour
             Debug.LogError($"[Network] Send failed: {ex.Message}");
         }
     }
-    
+
     private async System.Threading.Tasks.Task ReceiveLoop()
     {
         var buffer = new byte[4096];
-        
+
         while (_isConnected)
         {
             try
             {
                 var bytesRead = await _stream.ReadAsync(buffer, 0, buffer.Length);
                 if (bytesRead == 0) break;
-                
+
                 ProcessPacket(buffer, bytesRead);
             }
             catch (Exception ex)
@@ -588,11 +588,11 @@ public class NetworkClient : MonoBehaviour
             }
         }
     }
-    
+
     private void ProcessPacket(byte[] data, int length)
     {
-        var packet = MessagePackSerializer.Deserialize(data);
-        
+        var packet = MessagePackSerializer.Deserialize<Packet>(data);
+
         if (packet.Type == "MoveResponse")
         {
             var response = packet as MoveResponsePacket;
@@ -610,44 +610,39 @@ using UnityEngine;
 public class PlayerController : MonoBehaviour
 {
     private NetworkClient _networkClient;
-    private Vector3 _serverPosition;
-    
+
     void Start()
     {
-        _networkClient = FindObjectOfType();
+        _networkClient = FindObjectOfType<NetworkClient>();
         _networkClient.OnMoveConfirmed += OnServerMoveConfirmed;
-        _serverPosition = transform.position;
     }
-    
+
     void Update()
     {
         HandleInput();
     }
-    
+
     private void HandleInput()
     {
         Vector3 moveDirection = Vector3.zero;
-        
-        if (Input.GetKeyDown(KeyCode.W))
-            moveDirection = Vector3.forward;
-        else if (Input.GetKeyDown(KeyCode.S))
-            moveDirection = Vector3.back;
-        else if (Input.GetKeyDown(KeyCode.A))
-            moveDirection = Vector3.left;
-        else if (Input.GetKeyDown(KeyCode.D))
-            moveDirection = Vector3.right;
-        
+
+        if (Input.GetKeyDown(KeyCode.W))      moveDirection = Vector3.forward;
+        else if (Input.GetKeyDown(KeyCode.S)) moveDirection = Vector3.back;
+        else if (Input.GetKeyDown(KeyCode.A)) moveDirection = Vector3.left;
+        else if (Input.GetKeyDown(KeyCode.D)) moveDirection = Vector3.right;
+
         if (moveDirection != Vector3.zero)
         {
+            // 로컬에서 즉시 변경하지 않음 — 서버에 요청만 전송
             var newPosition = transform.position + moveDirection;
             _networkClient.SendMoveRequest(newPosition);
         }
     }
-    
+
+    // 서버로부터 승인된 위치만 반영
     private void OnServerMoveConfirmed(Vector3 serverPosition)
     {
         transform.position = serverPosition;
-        _serverPosition = serverPosition;
         Debug.Log($"[Client] Move confirmed: {serverPosition}");
     }
 }
@@ -711,13 +706,10 @@ services:
 docker-compose up -d
 
 # 2. 게임 서버
-cd game-server
-dotnet run
+cd game-server && dotnet run
 
 # 3. 플랫폼 서버
-cd platform-server
-bun install
-bun run dev
+cd platform-server && bun install && bun run dev
 
 # 4. Unity 클라이언트
 # Unity에서 GameScene 실행

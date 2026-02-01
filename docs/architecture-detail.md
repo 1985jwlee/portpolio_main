@@ -50,8 +50,6 @@
 | **비동기 처리** | Kafka를 통한 이벤트 기록 및 확장 |
 | **판정 책임** | 게임 서버 단독 수행 |
 | **기록 책임** | 플랫폼 서버 담당 |
-| **게임 서버** | 실시간 로직, 상태 관리 |
-| **플랫폼 서버** | 이벤트 처리, DB 연동, API 제공 |
 
 ---
 
@@ -136,20 +134,20 @@ public class MoveCommandValidator
         // 1. 범위 검증
         if (!IsWithinMapBounds(cmd.Position))
             return ValidationResult.Fail("Out of bounds");
-        
+
         // 2. 거리 검증 (텔레포트 방지)
         var distance = Vector3.Distance(player.Position, cmd.Position);
         if (distance > player.MaxMoveDistance)
             return ValidationResult.Fail("Move distance too large");
-        
+
         // 3. 상태 검증
         if (player.IsDead || player.IsStunned)
             return ValidationResult.Fail("Cannot move in current state");
-        
+
         // 4. 쿨다운 검증
         if (player.LastMoveTime + player.MoveCooldown > CurrentTime)
             return ValidationResult.Fail("Move on cooldown");
-        
+
         return ValidationResult.Success();
     }
 }
@@ -169,22 +167,22 @@ public class MoveCommandValidator
 public class GameTick
 {
     private const int TargetTickRate = 20; // 50ms
-    
+
     public async Task RunAsync()
     {
         while (true)
         {
             var startTime = DateTime.UtcNow;
-            
+
             // 1. Command 처리
             ProcessCommands();
-            
+
             // 2. World Update
             _world.Update();
-            
+
             // 3. Event Publishing
             PublishEvents();
-            
+
             // 4. 다음 Tick 대기
             await WaitForNextTick(startTime);
         }
@@ -218,9 +216,9 @@ public class GameTick
 - MatchCompletedEvent
 
 ❌ 나쁜 Event 이름:
-- MovePlayerCommand
-- KillPlayer
-- GiveItemCommand
+- MovePlayerCommand   (Command와 혼용)
+- KillPlayer          (행위 기술, 사실 아님)
+- GiveItemCommand     (Command와 혼용)
 ```
 
 #### Kafka Topic 구조
@@ -234,11 +232,9 @@ game.snapshot.zone          # Zone 스냅샷
 platform.commands           # 플랫폼→게임 지시
 ```
 
-**파티션 전략**:
-- Key: PlayerId 또는 ZoneId
-- 순서 보장이 필요한 이벤트는 동일 파티션 할당
+**파티션 전략**: Key로 PlayerId 또는 ZoneId 사용. 순서 보장이 필요한 이벤트는 동일 파티션에 할당합니다.
 
-**Consumer Group**:
+**Consumer Group:**
 ```
 Analytics Service    → 통계 및 분석
 Persistence Service  → DB 저장
@@ -251,26 +247,17 @@ Admin Dashboard      → 실시간 모니터링
 > **게임 서버는 Kafka의 응답을 기다리지 않습니다.**
 
 ```csharp
-// ❌ 잘못된 예시 (동기 처리)
 public void ProcessMove(MoveCommand cmd)
 {
+    // 1. 메모리에서 즉시 상태 변경
     player.Move(cmd.Position);
-    
-    var evt = new PlayerMovedEvent { ... };
-    await kafka.Publish(evt);  // ❌ 대기하면 안 됨!
-    
-    SendResponse(player.Position);
-}
 
-// ✅ 올바른 예시 (비동기 처리)
-public void ProcessMove(MoveCommand cmd)
-{
-    player.Move(cmd.Position);
-    
+    // 2. 이벤트 발행 (응답 대기 없음)
     var evt = new PlayerMovedEvent { ... };
-    kafka.PublishAsync(evt);  // ✅ Fire-and-Forget
-    
-    SendResponse(player.Position);  // 즉시 응답
+    kafka.PublishAsync(evt);  // Fire-and-Forget
+
+    // 3. 즉시 응답
+    SendResponse(player.Position);
 }
 ```
 
@@ -278,6 +265,8 @@ public void ProcessMove(MoveCommand cmd)
 - GameLoop Tick이 DB/Kafka 지연에 영향받으면 안 됨
 - 판정은 메모리에서 이미 확정됨
 - 기록 실패가 게임플레이를 막아서는 안 됨
+
+**버퍼 오버플로우 리스크**: 버퍼 크기(기본 10,000)를 초과하면 오래된 이벤트가 FIFO로 폐기됩니다. Phase 2에서 DLQ와 오프라인 재처리로 이 리스크를 완화합니다. → [구현 로드맵 Phase 2](docs/implementation-roadmap.md#phase-2-이벤트-신뢰성)
 
 ---
 
@@ -290,18 +279,6 @@ public void ProcessMove(MoveCommand cmd)
 - **이벤트**: Kafka
 - **DB**: MySQL
 - **ORM**: Drizzle
-
-### 구조
-
-```
-[ Kafka Consumer ]
-    ↓ Event Handling
-[ Business Logic ]
-    ↓
-[ Database (MySQL) ]
-    ↓
-[ REST API / WebSocket ]
-```
 
 ### 역할 분리
 
@@ -325,17 +302,17 @@ public void ProcessMove(MoveCommand cmd)
 // 중복 이벤트 처리 방지
 async function handleRewardEvent(event: RewardGrantedEvent) {
   const key = `event:${event.eventId}`;
-  
+
   // 이미 처리된 이벤트인지 확인
   const processed = await redis.get(key);
   if (processed) {
     logger.info(`Event already processed: ${event.eventId}`);
     return;
   }
-  
+
   // 처리
   await grantReward(event.playerId, event.amount);
-  
+
   // 처리 완료 기록 (TTL: 1시간)
   await redis.setex(key, 3600, 'processed');
 }
@@ -350,8 +327,8 @@ async function handleRewardEvent(event: RewardGrantedEvent) {
 | 저장소 | 역할 | 주기 | TTL | 복구 시간 |
 |--------|------|------|-----|-----------|
 | **Redis** | Hot Snapshot | 5~10초 | 2~5분 | 수초 |
-| **MongoDB** | Cold Snapshot | 1~5분 | - | 수분 |
-| **MySQL** | 영속 데이터 | 이벤트 기반 | - | - |
+| **MongoDB** | Cold Snapshot | 1~5분 | 영구 | 수분 |
+| **MySQL** | 영속 데이터 | 이벤트 기반 | 영구 | - |
 
 ### Redis (Hot Snapshot)
 
@@ -370,36 +347,23 @@ snapshot:session:{sessionId}
 ### MongoDB (Cold Snapshot)
 
 ```json
-// Document 예시
 {
   "_id": "zone_1_20240115_143000",
   "zoneId": "zone_1",
   "timestamp": 1705304600,
-  "players": [...],
-  "entities": [...],
+  "players": ["..."],
+  "entities": ["..."],
   "checksum": "abc123..."
 }
 ```
 
-**용도**:
-- 서버 점검 시 복구
-- Redis 장애 시 복구
-- 히스토리 분석
+용도: 서버 점검 복구, Redis 장애 복구, 히스토리 분석
 
 ### MySQL (영속 데이터)
 
-```
-테이블 설계:
-- accounts (계정 정보)
-- inventory (인벤토리)
-- transactions (재화 거래 내역)
-- match_history (매치 기록)
-```
+테이블: `accounts`, `inventory`, `transactions`, `match_history`
 
-**트랜잭션 사용 시점**:
-- 재화 차감/지급 (ACID 보장 필요)
-- 결제 처리
-- 중요 운영 데이터
+**트랜잭션 사용 시점**: 재화 차감/지급 (ACID 보장 필요), 결제 처리, 중요 운영 데이터
 
 ### 복구 우선순위
 
@@ -411,11 +375,8 @@ snapshot:session:{sessionId}
 3순위: 초기 상태 + Kafka Event Replay
 ```
 
-### 핵심 원칙
-
-> **게임 서버는 DB 성공/실패에 의존하지 않습니다.**
-
-이는 성능뿐 아니라 **장애 격리**를 위한 결정입니다.
+> **핵심 원칙: 게임 서버는 DB 성공/실패에 의존하지 않습니다.**
+> 이는 성능뿐 아니라 **장애 격리**를 위한 결정입니다.
 
 ---
 
