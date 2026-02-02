@@ -4,6 +4,22 @@
 
 ---
 
+## 📋 다이어그램 사용 가이드
+
+### README.md에 포함할 다이어그램
+1. **전체 시스템 아키텍처** - 첫인상용
+2. **장애 영향도 맵** - 안정성 증명용
+
+### 면접/프레젠테이션용
+1. **Command/Event 처리 흐름** - 설계 설명용
+2. **장애 복구 플로우** - 운영 관점 설명용
+
+### 기술 문서용
+1. **데이터 흐름** - 아키텍처 상세 설명용
+2. **배포 아키텍처** - 확장성 설명용
+
+---
+
 ## 📋 목차
 
 1. [전체 시스템 아키텍처](#전체-시스템-아키텍처)
@@ -65,14 +81,6 @@ graph TB
     GS -.->|Save| RD
     GS -.->|Save| MG
     PS -->|Persist| MY
-    
-    style UC fill:#e1f5ff
-    style GS fill:#fff4e1
-    style KF fill:#f0e1ff
-    style PS fill:#e1ffe1
-    style RD fill:#ffe1e1
-    style MG fill:#ffe1e1
-    style MY fill:#ffe1e1
 ```
 
 ---
@@ -174,11 +182,6 @@ flowchart TD
     CheckMongo -->|No| InitState[초기 상태로 시작]
     InitState --> EventReplay[Kafka Event Replay]
     EventReplay --> RecoveredManual([🔧 수동 복구<br/>RTO: 5-10분])
-    
-    style Start fill:#ff6b6b
-    style RecoveredFast fill:#51cf66
-    style RecoveredSlow fill:#ffd43b
-    style RecoveredManual fill:#ff922b
 ```
 
 ### 장애 영향도 맵
@@ -222,12 +225,6 @@ graph LR
     KF --> GP3 --> RC3 --> RT3
     MY --> GP4 --> RC4 --> RT4
     PS --> GP5 --> RC5 --> RT5
-    
-    style GP1 fill:#ff6b6b
-    style GP2 fill:#ffd43b
-    style GP3 fill:#51cf66
-    style GP4 fill:#51cf66
-    style GP5 fill:#51cf66
 ```
 
 ---
@@ -267,14 +264,6 @@ flowchart TB
         GameServer -.->|Async| Mongo
         Platform -->|Sync| MySQL
     end
-    
-    style Client fill:#e1f5ff
-    style GameServer fill:#fff4e1
-    style Event fill:#f0e1ff
-    style Platform fill:#e1ffe1
-    style Redis fill:#ffe1e1
-    style Mongo fill:#ffe1e1
-    style MySQL fill:#ffe1e1
 ```
 
 ### 스냅샷 저장 전략
@@ -316,11 +305,6 @@ graph TB
     Player -->|Every Change| K1
     K1 --> K2
     K2 --> K3
-    
-    style Player fill:#fff4e1
-    style R3 fill:#51cf66
-    style M4 fill:#339af0
-    style K3 fill:#f0e1ff
 ```
 
 ---
@@ -377,13 +361,6 @@ graph TB
     Kafka --> PS1
     Kafka --> PS2
     Kafka --> PSN
-    
-    style LB fill:#e1f5ff
-    style Z1 fill:#fff4e1
-    style Z2 fill:#fff4e1
-    style Z3 fill:#fff4e1
-    style ZN fill:#fff4e1
-    style Kafka fill:#f0e1ff
 ```
 
 ### 무중단 배포 (Rolling Update)
@@ -453,9 +430,6 @@ graph TB
     Coord --> Z10K3
     Coord --> Z10K4
     Coord --> Z10K5
-    
-    style Z100 fill:#e1f5ff
-    style Coord fill:#fff4e1
 ```
 
 ### B2B 비즈니스 모델 확장
@@ -498,12 +472,6 @@ graph TB
     
     C1 --> C2
     C1 --> C3
-    
-    style Core fill:#fff4e1
-    style Stream fill:#f0e1ff
-    style A1 fill:#e1ffe1
-    style B1 fill:#e1ffe1
-    style C1 fill:#e1ffe1
 ```
 
 ---
@@ -536,22 +504,6 @@ stateDiagram-v2
     
     Disconnected --> [*]
 ```
-
----
-
-## 다이어그램 사용 가이드
-
-### README.md에 포함할 다이어그램
-1. **전체 시스템 아키텍처** - 첫인상용
-2. **장애 영향도 맵** - 안정성 증명용
-
-### 면접/프레젠테이션용
-1. **Command/Event 처리 흐름** - 설계 설명용
-2. **장애 복구 플로우** - 운영 관점 설명용
-
-### 기술 문서용
-1. **데이터 흐름** - 아키텍처 상세 설명용
-2. **배포 아키텍처** - 확장성 설명용
 
 ---
 
